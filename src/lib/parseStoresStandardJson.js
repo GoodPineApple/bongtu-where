@@ -1,3 +1,5 @@
+import { stableStoreId } from "./stableStoreId.js"
+
 const BAG_SPLIT = /[,，、/|]+/
 
 function splitBagTypes(raw) {
@@ -46,16 +48,25 @@ export function parseStoresStandardJson(data) {
     const lng = parseFloat(row['경도'])
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
 
-    const biz = row['사업자등록번호']
-    const id =
-      biz != null && String(biz).trim() !== ''
-        ? String(biz).trim()
-        : `row-${index}`
+    const bizRaw = row['사업자등록번호']
+    const bizRegNo =
+      bizRaw != null && String(bizRaw).trim() !== ''
+        ? String(bizRaw).trim()
+        : ""
+
+    const id = stableStoreId({
+      storeName: String(name).trim(),
+      lat,
+      lng,
+      bizRegNo,
+      sourceIndex: index,
+    })
 
     const bagRaw = row['판매대상종량제봉투종류']
 
     stores.push({
       id,
+      bizRegNo,
       storeName: String(name).trim(),
       address: pickAddress(row),
       lat,
