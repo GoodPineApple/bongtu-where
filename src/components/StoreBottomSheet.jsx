@@ -82,7 +82,7 @@ export default function StoreBottomSheet({
               <Separator />
               <div>
                 <p className="text-muted-foreground mb-2 text-xs font-medium">
-                  재고 제보 (시뮬레이션)
+                  재고 제보
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button

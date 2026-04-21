@@ -7,16 +7,15 @@ import StoreBottomSheet from "@/components/StoreBottomSheet.jsx"
 import { Toaster } from "@/components/ui/sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { useGeolocation } from "@/hooks/useGeolocation.js"
-import { parseStoresStandardJson } from "@/lib/parseStoresStandardJson.js"
-const KAKAO_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY || ""
+import { supabase } from "@/lib/supabaseClient.js"
+import { fetchAllStores } from "@/lib/fetchStores.js"
+import { dbRowToStore, STORES_SELECT_COLUMNS } from "@/lib/storeToDbRow.js"
 
-/** @type {string} */
-const STORES_JSON_URL = "/전국종량제봉투판매소표준데이터.json"
+const KAKAO_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY || ""
 
 export default function App() {
   const { position: mapCenter } = useGeolocation()
   const [stores, setStores] = useState([])
-  const [dataErrors, setDataErrors] = useState([])
   const [dataLoadError, setDataLoadError] = useState(null)
   const [dataLoading, setDataLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
@@ -25,25 +24,28 @@ export default function App() {
   const [recenterNonce, setRecenterNonce] = useState(0)
 
   useEffect(() => {
+    if (!supabase) {
+      setStores([])
+      setDataLoading(false)
+      setDataLoadError(
+        "Supabase 환경 변수가 설정되지 않았습니다. .env 의 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 를 확인하세요.",
+      )
+      return undefined
+    }
+
     let cancelled = false
     setDataLoadError(null)
-    setDataErrors([])
     setDataLoading(true)
 
-    fetch(STORES_JSON_URL)
-      .then((res) => {
-        if (!res.ok)
-          throw new Error(`판매소 데이터를 불러오지 못했습니다. (${res.status})`)
-        return res.json()
-      })
-      .then((json) => {
+    fetchAllStores(supabase)
+      .then((next) => {
         if (cancelled) return
-        const { stores: next, errors } = parseStoresStandardJson(json)
         setStores(next)
-        setDataErrors(errors)
       })
       .catch((e) => {
-        if (!cancelled) setDataLoadError(e?.message || "데이터 로드 실패")
+        if (cancelled) return
+        setStores([])
+        setDataLoadError(e?.message || "판매소 데이터를 불러오지 못했습니다.")
       })
       .finally(() => {
         if (!cancelled) setDataLoading(false)
@@ -85,33 +87,85 @@ export default function App() {
   }, [])
 
   const handleReport = useCallback(
-    (status) => {
+    async (status) => {
       if (!selectedStore) return
+      if (!supabase) {
+        toast.error("Supabase 가 설정되지 않아 제보를 저장할 수 없습니다.")
+        return
+      }
+
       const id = selectedStore.id
-      const now = new Date().toISOString()
+      const previousStatus = selectedStore.stockStatus
+      const previousUpdatedAt = selectedStore.updatedAt
+      const optimisticAt = new Date().toISOString()
+
       setStores((prev) =>
         prev.map((s) =>
-          s.id === id ? { ...s, stockStatus: status, updatedAt: now } : s,
+          s.id === id
+            ? { ...s, stockStatus: status, updatedAt: optimisticAt }
+            : s,
         ),
       )
       setSelectedStore((prev) =>
         prev && prev.id === id
-          ? { ...prev, stockStatus: status, updatedAt: now }
+          ? { ...prev, stockStatus: status, updatedAt: optimisticAt }
           : prev,
       )
-      const labels = {
-        FULL: "재고 있음으로 반영했습니다.",
-        FEW: "소량 남음으로 반영했습니다.",
-        EMPTY: "품절로 반영했습니다.",
+
+      try {
+        const { error: insertError } = await supabase
+          .from("stock_reports")
+          .insert({
+            store_id: id,
+            previous_status: previousStatus,
+            reported_status: status,
+          })
+        if (insertError)
+          throw new Error(insertError.message || "제보 저장 실패")
+
+        const { data, error: selectError } = await supabase
+          .from("stores")
+          .select(STORES_SELECT_COLUMNS)
+          .eq("id", id)
+          .maybeSingle()
+
+        if (!selectError && data) {
+          const fresh = dbRowToStore(data)
+          if (fresh) {
+            setStores((prev) => prev.map((s) => (s.id === id ? fresh : s)))
+            setSelectedStore((prev) =>
+              prev && prev.id === id ? fresh : prev,
+            )
+          }
+        }
+
+        const labels = {
+          FULL: "재고 있음으로 반영했습니다.",
+          FEW: "소량 남음으로 반영했습니다.",
+          EMPTY: "품절로 반영했습니다.",
+        }
+        toast.success(labels[status] || "반영했습니다.")
+      } catch (e) {
+        setStores((prev) =>
+          prev.map((s) =>
+            s.id === id
+              ? { ...s, stockStatus: previousStatus, updatedAt: previousUpdatedAt }
+              : s,
+          ),
+        )
+        setSelectedStore((prev) =>
+          prev && prev.id === id
+            ? { ...prev, stockStatus: previousStatus, updatedAt: previousUpdatedAt }
+            : prev,
+        )
+        toast.error(e?.message || "제보 저장에 실패했습니다.")
       }
-      toast.success(labels[status] || "반영했습니다.")
     },
     [selectedStore],
   )
 
   const showDataBanner =
     dataLoadError ||
-    dataErrors.length > 0 ||
     dataLoading ||
     (stores.length === 0 && !dataLoadError && !dataLoading)
 
@@ -145,7 +199,9 @@ export default function App() {
             {dataLoading && (
               <>
                 <AlertTitle>데이터 로딩</AlertTitle>
-                <AlertDescription>판매소 데이터를 불러오는 중입니다…</AlertDescription>
+                <AlertDescription>
+                  Supabase 에서 판매소 데이터를 불러오는 중입니다…
+                </AlertDescription>
               </>
             )}
             {dataLoadError && (
@@ -154,18 +210,18 @@ export default function App() {
                 <AlertDescription>{dataLoadError}</AlertDescription>
               </>
             )}
-            {!dataLoading &&
-              !dataLoadError &&
-              dataErrors.map((err, i) => (
-                <AlertDescription key={i}>{err}</AlertDescription>
-              ))}
             {!dataLoading && !dataLoadError && stores.length === 0 && (
-              <AlertDescription>
-                <code className="rounded bg-muted px-1">
-                  public/전국종량제봉투판매소표준데이터.json
-                </code>{" "}
-                파일을 확인하세요.
-              </AlertDescription>
+              <>
+                <AlertTitle>데이터 없음</AlertTitle>
+                <AlertDescription>
+                  Supabase <code className="rounded bg-muted px-1">stores</code>{" "}
+                  테이블이 비어 있습니다.{" "}
+                  <code className="rounded bg-muted px-1">
+                    npm run import:stores
+                  </code>{" "}
+                  로 적재한 뒤 다시 시도하세요.
+                </AlertDescription>
+              </>
             )}
           </Alert>
         </div>

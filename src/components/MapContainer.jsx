@@ -111,6 +111,20 @@ function loadKakaoSdk(appKey) {
   return kakaoSdkPromise
 }
 
+const MAX_VISIBLE_OVERLAYS = 600
+
+/**
+ * @param {HTMLElement} dotEl
+ * @param {{ stockStatus: string }} store
+ * @param {boolean} isSelected
+ */
+function styleDot(dotEl, store, isSelected) {
+  const size = isSelected ? 20 : 16
+  dotEl.style.width = `${size}px`
+  dotEl.style.height = `${size}px`
+  dotEl.style.background = stockMarkerColor(store.stockStatus)
+}
+
 /**
  * @param {{
  *   appKey: string
@@ -131,25 +145,177 @@ export default function MapContainer({
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
-  const overlaysRef = useRef([])
+
+  /** id → 원본 Store (목록 전체) */
+  const storesByIdRef = useRef(new Map())
+  /** id → { overlay, dotEl, currentStore } (생성된 적 있는 것만) */
+  const overlaysCacheRef = useRef(new Map())
+  /** 현재 지도에 setMap(map) 으로 켜져 있는 id 집합 */
+  const visibleSetRef = useRef(new Set())
+  const prevSelectedRef = useRef(null)
+  const selectedStoreIdRef = useRef(selectedStoreId)
+  const onSelectStoreRef = useRef(onSelectStore)
+  selectedStoreIdRef.current = selectedStoreId
+  onSelectStoreRef.current = onSelectStore
+
   const [sdkError, setSdkError] = useState(null)
   const [mapReady, setMapReady] = useState(false)
+  const [overflowCount, setOverflowCount] = useState(0)
 
-  const clearOverlays = useCallback(() => {
-    overlaysRef.current.forEach((o) => {
+  const tearDownAllOverlays = useCallback(() => {
+    for (const entry of overlaysCacheRef.current.values()) {
       try {
-        o.setMap(null)
+        entry.overlay.setMap(null)
       } catch {
         /* ignore */
       }
-    })
-    overlaysRef.current = []
+    }
+    overlaysCacheRef.current.clear()
+    visibleSetRef.current.clear()
   }, [])
+
+  const ensureOverlay = useCallback((store) => {
+    const cache = overlaysCacheRef.current
+    const cached = cache.get(store.id)
+    if (cached) {
+      if (cached.currentStore !== store) {
+        cached.currentStore = store
+        const isSel = selectedStoreIdRef.current === store.id
+        styleDot(cached.dotEl, store, isSel)
+      }
+      return cached
+    }
+
+    const wrap = document.createElement("button")
+    wrap.type = "button"
+    wrap.setAttribute("aria-label", store.storeName)
+    wrap.style.cssText = [
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "width:44px",
+      "height:44px",
+      "min-width:44px",
+      "min-height:44px",
+      "padding:0",
+      "margin:0",
+      "border:0",
+      "background:transparent",
+      "cursor:pointer",
+      "touch-action:manipulation",
+      "-webkit-tap-highlight-color:transparent",
+      "box-sizing:border-box",
+      "transform:translate(-50%,-50%)",
+    ].join(";")
+
+    const dot = document.createElement("span")
+    dot.setAttribute("aria-hidden", "true")
+    dot.style.cssText = [
+      "display:block",
+      "border-radius:50%",
+      "border:2px solid #fff",
+      "box-shadow:0 1px 4px rgba(0,0,0,.35)",
+      "pointer-events:none",
+      "flex-shrink:0",
+    ].join(";")
+    const isSel = selectedStoreIdRef.current === store.id
+    styleDot(dot, store, isSel)
+    wrap.appendChild(dot)
+
+    wrap.addEventListener("click", (ev) => {
+      ev.stopPropagation()
+      const latest = storesByIdRef.current.get(store.id) || store
+      onSelectStoreRef.current?.(latest)
+    })
+
+    const pos = new window.kakao.maps.LatLng(store.lat, store.lng)
+    const overlay = new window.kakao.maps.CustomOverlay({
+      position: pos,
+      content: wrap,
+      yAnchor: 0.5,
+      xAnchor: 0.5,
+      clickable: true,
+    })
+
+    const entry = { overlay, dotEl: dot, currentStore: store }
+    cache.set(store.id, entry)
+    return entry
+  }, [])
+
+  const recomputeVisible = useCallback(() => {
+    const map = mapRef.current
+    if (!map || typeof map.getBounds !== "function") return
+
+    const bounds = map.getBounds()
+    const sw = bounds.getSouthWest()
+    const ne = bounds.getNorthEast()
+    const swLat = sw.getLat()
+    const swLng = sw.getLng()
+    const neLat = ne.getLat()
+    const neLng = ne.getLng()
+
+    const inBounds = []
+    for (const store of storesByIdRef.current.values()) {
+      if (
+        store.lat >= swLat &&
+        store.lat <= neLat &&
+        store.lng >= swLng &&
+        store.lng <= neLng
+      ) {
+        inBounds.push(store)
+      }
+    }
+
+    let visibleStores = inBounds
+    let overflow = 0
+    if (inBounds.length > MAX_VISIBLE_OVERLAYS) {
+      const cLat = (swLat + neLat) / 2
+      const cLng = (swLng + neLng) / 2
+      inBounds.sort((a, b) => {
+        const da = (a.lat - cLat) ** 2 + (a.lng - cLng) ** 2
+        const db = (b.lat - cLat) ** 2 + (b.lng - cLng) ** 2
+        return da - db
+      })
+      overflow = inBounds.length - MAX_VISIBLE_OVERLAYS
+      visibleStores = inBounds.slice(0, MAX_VISIBLE_OVERLAYS)
+    }
+
+    const nextVisible = new Set()
+    for (const s of visibleStores) nextVisible.add(s.id)
+
+    const prevVisible = visibleSetRef.current
+    for (const id of prevVisible) {
+      if (!nextVisible.has(id)) {
+        const entry = overlaysCacheRef.current.get(id)
+        if (entry) {
+          try {
+            entry.overlay.setMap(null)
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+    for (const store of visibleStores) {
+      const entry = ensureOverlay(store)
+      if (!prevVisible.has(store.id)) {
+        try {
+          entry.overlay.setMap(map)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    visibleSetRef.current = nextVisible
+    setOverflowCount(overflow)
+  }, [ensureOverlay])
 
   useEffect(() => {
     if (!appKey || !containerRef.current) return undefined
 
     let cancelled = false
+    let idleListener = null
     setSdkError(null)
     setMapReady(false)
 
@@ -168,6 +334,10 @@ export default function MapContainer({
           disableDoubleClickZoom: false,
         })
         mapRef.current = map
+        idleListener = () => recomputeVisible()
+        if (window.kakao?.maps?.event) {
+          window.kakao.maps.event.addListener(map, "idle", idleListener)
+        }
         setMapReady(true)
       })
       .catch((e) => {
@@ -177,11 +347,16 @@ export default function MapContainer({
 
     return () => {
       cancelled = true
-      clearOverlays()
+      const map = mapRef.current
+      if (map && idleListener && window.kakao?.maps?.event) {
+        window.kakao.maps.event.removeListener(map, "idle", idleListener)
+      }
+      tearDownAllOverlays()
       mapRef.current = null
+      prevSelectedRef.current = null
       setMapReady(false)
     }
-  }, [appKey, clearOverlays, mapCenter.lat, mapCenter.lng])
+  }, [appKey, mapCenter.lat, mapCenter.lng, recomputeVisible, tearDownAllOverlays])
 
   useEffect(() => {
     const map = mapRef.current
@@ -202,67 +377,39 @@ export default function MapContainer({
     const map = mapRef.current
     if (!mapReady || !map || !window.kakao?.maps) return
 
-    clearOverlays()
+    const incoming = new Map()
+    for (const s of stores) incoming.set(s.id, s)
 
-    stores.forEach((store) => {
-      const wrap = document.createElement("button")
-      wrap.type = "button"
-      wrap.setAttribute("aria-label", store.storeName)
-      wrap.style.cssText = [
-        "display:flex",
-        "align-items:center",
-        "justify-content:center",
-        "width:44px",
-        "height:44px",
-        "min-width:44px",
-        "min-height:44px",
-        "padding:0",
-        "margin:0",
-        "border:0",
-        "background:transparent",
-        "cursor:pointer",
-        "touch-action:manipulation",
-        "-webkit-tap-highlight-color:transparent",
-        "box-sizing:border-box",
-        "transform:translate(-50%,-50%)",
-      ].join(";")
-
-      const dot = document.createElement("span")
-      dot.setAttribute("aria-hidden", "true")
-      const isSelected = selectedStoreId === store.id
-      const size = isSelected ? 20 : 16
-      dot.style.cssText = [
-        "display:block",
-        `width:${size}px`,
-        `height:${size}px`,
-        "border-radius:50%",
-        "border:2px solid #fff",
-        "box-shadow:0 1px 4px rgba(0,0,0,.35)",
-        `background:${stockMarkerColor(store.stockStatus)}`,
-        "pointer-events:none",
-        "flex-shrink:0",
-      ].join(";")
-
-      wrap.appendChild(dot)
-
-      const onActivate = (ev) => {
-        ev.stopPropagation()
-        onSelectStore(store)
+    for (const id of Array.from(overlaysCacheRef.current.keys())) {
+      if (!incoming.has(id)) {
+        const entry = overlaysCacheRef.current.get(id)
+        try {
+          entry.overlay.setMap(null)
+        } catch {
+          /* ignore */
+        }
+        overlaysCacheRef.current.delete(id)
+        visibleSetRef.current.delete(id)
       }
-      wrap.addEventListener("click", onActivate)
+    }
 
-      const pos = new window.kakao.maps.LatLng(store.lat, store.lng)
-      const overlay = new window.kakao.maps.CustomOverlay({
-        position: pos,
-        content: wrap,
-        yAnchor: 0.5,
-        xAnchor: 0.5,
-        clickable: true,
-      })
-      overlay.setMap(map)
-      overlaysRef.current.push(overlay)
-    })
-  }, [stores, mapReady, clearOverlays, onSelectStore, selectedStoreId])
+    storesByIdRef.current = incoming
+    recomputeVisible()
+  }, [stores, mapReady, recomputeVisible])
+
+  useEffect(() => {
+    if (!mapReady) return
+    const prevId = prevSelectedRef.current
+    if (prevId && prevId !== selectedStoreId) {
+      const prev = overlaysCacheRef.current.get(prevId)
+      if (prev) styleDot(prev.dotEl, prev.currentStore, false)
+    }
+    if (selectedStoreId) {
+      const cur = overlaysCacheRef.current.get(selectedStoreId)
+      if (cur) styleDot(cur.dotEl, cur.currentStore, true)
+    }
+    prevSelectedRef.current = selectedStoreId
+  }, [selectedStoreId, mapReady])
 
   if (!appKey) {
     return (
@@ -299,6 +446,13 @@ export default function MapContainer({
         aria-label="지도"
       />
       <MapZoomControls map={mapRef.current} mapReady={mapReady} />
+      {overflowCount > 0 && (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-[5] -translate-x-1/2">
+          <div className="pointer-events-auto rounded-full border border-border bg-card/95 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+            +{overflowCount}곳 · 지도를 확대하거나 검색해 보세요
+          </div>
+        </div>
+      )}
     </div>
   )
 }
