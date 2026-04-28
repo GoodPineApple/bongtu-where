@@ -87,16 +87,18 @@ export default function App() {
   }, [])
 
   const handleReport = useCallback(
+    /** 시트는 호출부에서 먼저 닫고, 여기서는 목록·서버만 비동기 처리 */
     async (status) => {
-      if (!selectedStore) return
+      const target = selectedStore
+      if (!target) return
       if (!supabase) {
         toast.error("Supabase 가 설정되지 않아 제보를 저장할 수 없습니다.")
         return
       }
 
-      const id = selectedStore.id
-      const previousStatus = selectedStore.stockStatus
-      const previousUpdatedAt = selectedStore.updatedAt
+      const id = target.id
+      const previousStatus = target.stockStatus
+      const previousUpdatedAt = target.updatedAt
       const optimisticAt = new Date().toISOString()
 
       setStores((prev) =>
@@ -105,11 +107,6 @@ export default function App() {
             ? { ...s, stockStatus: status, updatedAt: optimisticAt }
             : s,
         ),
-      )
-      setSelectedStore((prev) =>
-        prev && prev.id === id
-          ? { ...prev, stockStatus: status, updatedAt: optimisticAt }
-          : prev,
       )
 
       try {
@@ -152,11 +149,6 @@ export default function App() {
               ? { ...s, stockStatus: previousStatus, updatedAt: previousUpdatedAt }
               : s,
           ),
-        )
-        setSelectedStore((prev) =>
-          prev && prev.id === id
-            ? { ...prev, stockStatus: previousStatus, updatedAt: previousUpdatedAt }
-            : prev,
         )
         toast.error(e?.message || "제보 저장에 실패했습니다.")
       }

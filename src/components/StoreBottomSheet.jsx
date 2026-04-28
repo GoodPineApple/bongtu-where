@@ -15,7 +15,7 @@ import { Separator } from "@/components/ui/separator"
  *   store: import('../types/store.js').Store | null
  *   distanceOrigin: { lat: number, lng: number }
  *   onClose: () => void
- *   onReport: (status: 'FULL' | 'FEW' | 'EMPTY') => void
+ *   onReport: (status: 'FULL' | 'FEW' | 'EMPTY') => void | Promise<void>
  * }} props
  */
 export default function StoreBottomSheet({
@@ -24,6 +24,12 @@ export default function StoreBottomSheet({
   onClose,
   onReport,
 }) {
+  /** 모달은 즉시 닫고, 제보·서버 반영은 부모에서 비동기 처리 */
+  const onReportClick = (status) => {
+    onClose()
+    void onReport(status)
+  }
+
   const open = store != null
   const dist =
     store != null
@@ -88,21 +94,21 @@ export default function StoreBottomSheet({
                   <Button
                     type="button"
                     className="bg-emerald-600 text-white hover:bg-emerald-600/90"
-                    onClick={() => onReport("FULL")}
+                    onClick={() => onReportClick("FULL")}
                   >
                     재고 있음
                   </Button>
                   <Button
                     type="button"
                     className="bg-amber-500 text-white hover:bg-amber-500/90"
-                    onClick={() => onReport("FEW")}
+                    onClick={() => onReportClick("FEW")}
                   >
                     소량 남음
                   </Button>
                   <Button
                     type="button"
                     variant="destructive"
-                    onClick={() => onReport("EMPTY")}
+                    onClick={() => onReportClick("EMPTY")}
                   >
                     품절
                   </Button>
