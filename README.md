@@ -1,3 +1,11 @@
+## 스택 · 실행
+
+- **Next.js 15** (App Router) + **TypeScript** + Tailwind
+- `npm run dev` — 로컬 (기본 http://localhost:3000)
+- `npm run build` / `npm run start` — 프로덕션
+- 환경 변수: [`.env.example`](.env.example) (`NEXT_PUBLIC_*` 는 브라우저에 노출됨). 기존 `VITE_*` 는 Next에서 사용하지 않으니 이름을 맞춰 옮기면 됨.
+- 데이터 적재: `npm run import:stores` ([`scripts/import-stores.ts`](scripts/import-stores.ts))
+
 ## 데일리 구현
 
 ### 4/14
