@@ -13,6 +13,7 @@
 1. [`supabase/sql/stores_table.sql`](supabase/sql/stores_table.sql) — `stores` 테이블 + 공개 select RLS
 2. [`supabase/sql/stock_reports.sql`](supabase/sql/stock_reports.sql) — `stock_reports` 테이블 + anon insert RLS + 트리거
 3. [`supabase/sql/stores_spatial_idx.sql`](supabase/sql/stores_spatial_idx.sql) — `(lat, lng)` 인덱스 + `stores_in_bounds` / `stores_bag_types` RPC
+4. [`supabase/sql/community_board.sql`](supabase/sql/community_board.sql) — 익명 커뮤니티 `community_posts` / `community_comments` + 공개 select·anon insert RLS, 좋아요 전용 RPC `increment_community_post_likes`
 
 지도 화면은 `stores_in_bounds` RPC 로 **현재 보이는 영역의 행만** 가져오고, 칩에 쓰는 봉투 종류는 `stores_bag_types` RPC 로 **앱 로드 시 1회** 받아 둔다.
 
@@ -50,6 +51,10 @@
 - 지도 기능 개선점 확인
 - 봉투어디 게시판 개발 시작
 - NextJS의 서버컴포넌트 사용하도록 변경하기
+- 랜딩페이지 경로 분기하기
+  - / 랜딩페이지
+  - /map 봉투어디 지도
+  - /community 익명커뮤니티
 
 ### 다음에 할일
 
