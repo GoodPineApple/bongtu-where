@@ -11,35 +11,51 @@ import { useGeolocation } from "@/hooks/use-geolocation"
 import { dbRowToStore, STORES_SELECT_COLUMNS } from "@/lib/data/store-to-db-row"
 import { supabase } from "@/lib/supabase/browser-client"
 import type { StockStatus, Store } from "@/types/store"
-import { useStoresQuery } from "./use-stores-query"
-import { useVisibilityFilter } from "./use-visibility-filter"
+import { useBagTypes } from "./use-bag-types"
+import { useViewportStores } from "./use-viewport-stores"
 
 const kakaoMapKey = process.env.NEXT_PUBLIC_KAKAO_MAP_APP_KEY ?? ""
 
-export function MapExplorer() {
+export type MapExplorerProps = {
+  /** 커뮤니티 등에서 지도 탭으로 넘어올 때 검색창에 한 번 채울 문자열 */
+  bootstrapSearchQuery?: string | null
+  onBootstrapSearchConsumed?: () => void
+}
+
+export function MapExplorer({
+  bootstrapSearchQuery = null,
+  onBootstrapSearchConsumed,
+}: MapExplorerProps = {}) {
   const { position: mapCenter } = useGeolocation()
-  const { stores, setStores, error: dataLoadError, loading: dataLoading } =
-    useStoresQuery(supabase)
 
   const [searchQuery, setSearchQuery] = useState("")
   const [bagFilter, setBagFilter] = useState<string | null>(null)
   const [selectedStore, setSelectedStore] = useState<Store | null>(null)
   const [recenterNonce, setRecenterNonce] = useState(0)
 
-  const { bagOptions, visibleStores } = useVisibilityFilter({
+  useEffect(() => {
+    if (bootstrapSearchQuery == null || bootstrapSearchQuery === "") return
+    setSearchQuery(bootstrapSearchQuery)
+    onBootstrapSearchConsumed?.()
+  }, [bootstrapSearchQuery, onBootstrapSearchConsumed])
+
+  const {
     stores,
-    searchQuery,
-    bagFilter,
-  })
+    setStores,
+    loading: dataLoading,
+    error: dataLoadError,
+    truncated,
+    setBounds,
+  } = useViewportStores(supabase, { query: searchQuery, bagFilter })
+
+  const { bagOptions } = useBagTypes(supabase)
 
   useEffect(() => {
-    if (
-      selectedStore &&
-      !visibleStores.some((s) => s.id === selectedStore.id)
-    ) {
+    if (!selectedStore) return
+    if (!stores.some((s) => s.id === selectedStore.id)) {
       setSelectedStore(null)
     }
-  }, [visibleStores, selectedStore])
+  }, [stores, selectedStore])
 
   const handleSelectStore = useCallback((store: Store) => {
     setSelectedStore(store)
@@ -118,20 +134,18 @@ export function MapExplorer() {
     [selectedStore, setStores],
   )
 
-  const showDataBanner =
-    dataLoadError ||
-    dataLoading ||
-    (stores.length === 0 && !dataLoadError && !dataLoading)
+  const showBanner = Boolean(dataLoadError) || truncated
 
   return (
     <div className="relative h-full min-h-0 w-full bg-background">
       <MapContainer
         appKey={kakaoMapKey}
         mapCenter={mapCenter}
-        stores={visibleStores}
+        stores={stores}
         selectedStoreId={selectedStore?.id ?? null}
         onSelectStore={handleSelectStore}
         recenterNonce={recenterNonce}
+        onViewportBoundsChange={setBounds}
       />
 
       <FilterBar
@@ -144,36 +158,31 @@ export function MapExplorer() {
 
       <MyLocationButton onClick={() => setRecenterNonce((n) => n + 1)} />
 
-      {showDataBanner && (
+      {dataLoading && (
+        <div className="pointer-events-none absolute top-28 left-1/2 z-10 -translate-x-1/2">
+          <div className="rounded-full border border-border bg-card/95 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+            판매소 불러오는 중…
+          </div>
+        </div>
+      )}
+
+      {showBanner && (
         <div className="pointer-events-none absolute top-28 right-3 left-3 z-10 max-h-40 overflow-y-auto">
           <Alert
             variant={dataLoadError ? "destructive" : "default"}
             className="pointer-events-auto border shadow-sm"
           >
-            {dataLoading && (
-              <>
-                <AlertTitle>데이터 로딩</AlertTitle>
-                <AlertDescription>
-                  Supabase 에서 판매소 데이터를 불러오는 중입니다…
-                </AlertDescription>
-              </>
-            )}
-            {dataLoadError && (
+            {dataLoadError ? (
               <>
                 <AlertTitle>불러오기 실패</AlertTitle>
                 <AlertDescription>{dataLoadError}</AlertDescription>
               </>
-            )}
-            {!dataLoading && !dataLoadError && stores.length === 0 && (
+            ) : (
               <>
-                <AlertTitle>데이터 없음</AlertTitle>
+                <AlertTitle>결과가 너무 많습니다</AlertTitle>
                 <AlertDescription>
-                  Supabase <code className="rounded bg-muted px-1">stores</code>{" "}
-                  테이블이 비어 있습니다.{" "}
-                  <code className="rounded bg-muted px-1">
-                    npm run import:stores
-                  </code>{" "}
-                  로 적재한 뒤 다시 시도하세요.
+                  현재 화면 영역에서 결과 상한에 도달했습니다. 지도를 확대하거나
+                  검색·필터를 좁혀 보세요.
                 </AlertDescription>
               </>
             )}

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react"
 import { stockMarkerColor } from "@/lib/map/marker-colors"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { MapZoomControls } from "@/components/features/map/map-zoom-controls"
+import type { ViewportBounds } from "@/lib/data/fetch-stores-in-bounds"
 import type { Store } from "@/types/store"
 
 let kakaoSdkPromise: Promise<void> | null = null
@@ -152,6 +153,8 @@ export type MapContainerProps = {
   selectedStoreId: string | null
   onSelectStore: (store: Store) => void
   recenterNonce: number
+  /** 지도 idle 시점의 화면 bounds. 부모에서 디바운스·서버 조회를 담당. */
+  onViewportBoundsChange?: (bounds: ViewportBounds) => void
 }
 
 export function MapContainer({
@@ -161,6 +164,7 @@ export function MapContainer({
   selectedStoreId,
   onSelectStore,
   recenterNonce,
+  onViewportBoundsChange,
 }: MapContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<KakaoMapHandle | null>(null)
@@ -171,8 +175,10 @@ export function MapContainer({
   const prevSelectedRef = useRef<string | null>(null)
   const selectedStoreIdRef = useRef(selectedStoreId)
   const onSelectStoreRef = useRef(onSelectStore)
+  const onViewportBoundsChangeRef = useRef(onViewportBoundsChange)
   selectedStoreIdRef.current = selectedStoreId
   onSelectStoreRef.current = onSelectStore
+  onViewportBoundsChangeRef.current = onViewportBoundsChange
 
   const [sdkError, setSdkError] = useState<string | null>(null)
   const [mapReady, setMapReady] = useState(false)
@@ -257,6 +263,21 @@ export function MapContainer({
     const entry: OverlayCacheEntry = { overlay, dotEl: dot, currentStore: store }
     cache.set(store.id, entry)
     return entry
+  }, [])
+
+  const emitBounds = useCallback(() => {
+    const cb = onViewportBoundsChangeRef.current
+    const map = mapRef.current
+    if (!cb || !map || typeof map.getBounds !== "function") return
+    const bounds = map.getBounds()
+    const sw = bounds.getSouthWest()
+    const ne = bounds.getNorthEast()
+    cb({
+      swLat: sw.getLat(),
+      swLng: sw.getLng(),
+      neLat: ne.getLat(),
+      neLng: ne.getLng(),
+    })
   }, [])
 
   const recomputeVisible = useCallback(() => {
@@ -348,11 +369,15 @@ export function MapContainer({
           disableDoubleClickZoom: false,
         }) as KakaoMapHandle
         mapRef.current = map
-        idleListener = () => recomputeVisible()
+        idleListener = () => {
+          recomputeVisible()
+          emitBounds()
+        }
         if (window.kakao.maps.event && idleListener) {
           window.kakao.maps.event.addListener(map as never, "idle", idleListener)
         }
         setMapReady(true)
+        emitBounds()
       })
       .catch((e: unknown) => {
         if (!cancelled)
@@ -376,7 +401,14 @@ export function MapContainer({
       prevSelectedRef.current = null
       setMapReady(false)
     }
-  }, [appKey, mapCenter.lat, mapCenter.lng, recomputeVisible, tearDownAllOverlays])
+  }, [
+    appKey,
+    mapCenter.lat,
+    mapCenter.lng,
+    recomputeVisible,
+    emitBounds,
+    tearDownAllOverlays,
+  ])
 
   useEffect(() => {
     const map = mapRef.current

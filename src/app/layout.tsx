@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import type { ReactNode } from "react"
+import { GlobalNavBar } from "@/components/features/shell/global-nav-bar"
 import { Providers } from "@/components/providers"
 import "./globals.css"
 
@@ -16,7 +17,12 @@ export default function RootLayout({
   return (
     <html lang="ko" className="theme">
       <body className="min-h-dvh antialiased">
-        <Providers>{children}</Providers>
+        <div className="flex h-dvh min-h-0 flex-col">
+          <GlobalNavBar />
+          <Providers>
+            <main className="min-h-0 flex-1">{children}</main>
+          </Providers>
+        </div>
       </body>
     </html>
   )
